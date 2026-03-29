@@ -7,6 +7,7 @@ using static TorchSharp.torch.nn;
 using static TorchSharp.torch;
 using TorchSharp.Modules;
 using TorchSharp;
+using System.IO.Compression;
 
 namespace Predictor
 {
@@ -84,34 +85,42 @@ namespace Predictor
                 lastLoss = epochLoss;
 
                 model.eval();
-                using var _ = no_grad();
-
-                using var predVal = model.forward(Xval);
-                using var valLossTensor = functional.huber_loss(predVal, Yval);
-                float valLoss = valLossTensor.item<float>();
-
-                if (valLoss < bestLoss)
+                using (var ng = no_grad())
                 {
-                    bestLoss = valLoss;
-                    model.save(output + ".best");
+                    using var predVal = model.forward(Xval);
+                    using var valLossTensor = functional.huber_loss(predVal, Yval);
+                    float valLoss = valLossTensor.item<float>();
+
+                    if (valLoss < bestLoss)
+                    {
+                        bestLoss = valLoss;
+                        model.save(output + ".best");
+                    }
+
+                    double currentLr = opt.ParamGroups.First().LearningRate;
+                    Console.WriteLine(
+                        $"Epoch {epoch}/{numepoch} | " +
+                        $"Train: {epochLoss:F4} | Val: {valLoss:F4} | Best: {bestLoss:F4} | LR: {currentLr:E2}"
+                    );
                 }
-
-                double currentLr = opt.ParamGroups.First().LearningRate;
-                Console.WriteLine(
-                    $"Epoch {epoch}/{numepoch} | " +
-                    $"Train: {epochLoss:F4} | Val: {valLoss:F4} | Best: {bestLoss:F4} | LR: {currentLr:E2}"
-                );
-
+                model.train();
 
                 Console.CursorTop--;
                 Console.CursorLeft = 0;
+
+                xShuffle.Dispose();
+                yShuffle.Dispose();
             }
 
             Console.CursorTop++;
 
             model.save(output+".current");
 
-            File.Copy(output + ".best",output,true);
+            using (var zip = ZipFile.Open(output,ZipArchiveMode.Create))
+            {
+                zip.CreateEntryFromFile(output + ".best","model");
+                zip.CreateEntryFromFile("data_normals.json", "normals");
+            }
 
             Console.WriteLine($"Training completed. Final loss: {lastLoss:F4}, Best loss: {bestLoss:F4}");
             Console.WriteLine($"Saved best model to {output}");

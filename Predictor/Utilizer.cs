@@ -7,6 +7,8 @@ using static TorchSharp.torch.nn;
 using static TorchSharp.torch;
 using TorchSharp.Modules;
 using Newtonsoft.Json;
+using System.IO.Compression;
+using ICSharpCode.SharpZipLib.GZip;
 
 namespace Predictor
 {
@@ -14,7 +16,17 @@ namespace Predictor
     {
         public static void Predict(WeatherReading reading,int hour,string modelpath)
         {
-            var normals = JsonConvert.DeserializeObject<NormalizedJson>(File.ReadAllText("data_normals.json"))!;
+            ZipArchiveEntry ms;
+            string ns;
+
+            var zip = ZipFile.Open(modelpath, ZipArchiveMode.Read);
+
+            ms = zip.GetEntry("model")!;
+
+            using (var reader = new StreamReader(zip.GetEntry("normals")!.Open()))
+                ns = reader.ReadToEnd();
+
+            var normals = JsonConvert.DeserializeObject<NormalizedJson>(ns)!;
 
             float[] GivenFormattedData = [
                 reading.temp,
@@ -33,21 +45,26 @@ namespace Predictor
 
             var y = tensor(ListHelpers.ToArray(new List<float[]>() {GivenFormattedData})).reshape(1, 9);
 
-            var model = new WeatherNet();
-            model.load(modelpath);
+            using (var st = ms.Open())
+            {
+                var model = new WeatherNet();
+                model.load(st);
 
-            using var _ = no_grad();
-            var result = model.forward(y);
+                using var _ = no_grad();
+                var result = model.forward(y);
 
-            float[] values = result.data<float>().ToArray();
+                float[] values = result.data<float>().ToArray();
 
-            for (int i = 0; i < 4; i++)
-                values[i] = values[i] * normals.outStd[i] + normals.outMean[i];
+                for (int i = 0; i < 4; i++)
+                    values[i] = values[i] * normals.outStd[i] + normals.outMean[i];
 
-            Console.WriteLine($"Temperature: {values[0]} C");
-            Console.WriteLine($"Humidity: {values[1]} %");
-            Console.WriteLine($"Pressure: {values[2]} hPa");
-            Console.WriteLine(Math.Round(values[3]) > 0 ? "Raining" : "Not raining");
+                Console.WriteLine($"Temperature: {values[0]} C");
+                Console.WriteLine($"Humidity: {values[1]} %");
+                Console.WriteLine($"Pressure: {values[2]} hPa");
+                Console.WriteLine(Math.Round(values[3]) > 0 ? "Raining" : "Not raining");
+            }
+
+            zip.Dispose();
         }
     }
 }

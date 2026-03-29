@@ -11,24 +11,30 @@ namespace Predictor
 {
     public class ResidualBlock : Module<Tensor, Tensor>
     {
-        private readonly Linear fc1, fc2;
-        private readonly LayerNorm norm;
+        private readonly MultiheadAttention attn;
+        private readonly Linear ff1, ff2;
+        private readonly LayerNorm norm1, norm2;
         private readonly Dropout drop;
 
-        public ResidualBlock(long dim, double dropRate = 0.2) : base("ResidualBlock")
+        public ResidualBlock(long dim, int threads, double dropRate = 0.2) : base("ResidualBlock")
         {
-            fc1 = Linear(dim, dim);
-            fc2 = Linear(dim, dim);
-            norm = LayerNorm(dim);
+            attn = MultiheadAttention(dim, threads, dropout: dropRate);
+            ff1 = Linear(dim, dim * 4);
+            ff2 = Linear(dim * 4, dim);
+            norm1 = LayerNorm(dim);
+            norm2 = LayerNorm(dim);
             drop = Dropout(dropRate);
             RegisterComponents();
         }
 
         public override Tensor forward(Tensor x)
         {
-            var h = functional.gelu(fc1.forward(x));
-            h = drop.forward(fc2.forward(h));
-            return norm.forward(x + h);
+            var q = x.unsqueeze(0);
+            var (attnOut, _) = attn.forward(q, q, q,null,false,null);
+            x = norm1.forward(x + attnOut.squeeze(0));
+
+            var h = drop.forward(functional.gelu(ff1.forward(x)));
+            return norm2.forward(x + ff2.forward(h));
         }
     }
 
@@ -42,8 +48,8 @@ namespace Predictor
                 Linear(9, 64),
                 GELU(),
                 LayerNorm(64),
-                new ResidualBlock(64),
-                new ResidualBlock(64),
+                new ResidualBlock(64, 8),
+                new ResidualBlock(64, 8),
                 Linear(64, 32),
                 GELU(),
                 Linear(32, 4)

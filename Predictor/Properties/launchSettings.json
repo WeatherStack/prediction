@@ -2,7 +2,7 @@
   "profiles": {
     "Predictor": {
       "commandName": "Project",
-      "commandLineArgs": "train traindata big-model-24hrs.bin 24 100"
+      "commandLineArgs": "train traindata models/big-model-24hrs.wm 24 20"
     }
   }
 }
