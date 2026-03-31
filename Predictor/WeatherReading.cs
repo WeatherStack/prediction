@@ -10,7 +10,7 @@ namespace Predictor
 {
     public class ReadingContainer
     {
-        public static (Tensor,Tensor) BuildTensors(string json,int hourspredict)
+        public static (Tensor, Tensor) BuildTensors(string json, int hourspredict)
         {
             ReadingContainer jd;
 
@@ -18,44 +18,46 @@ namespace Predictor
             {
                 List<WeatherReading> readings = new();
 
-                foreach (var item in Directory.GetFiles(json,"*.json",SearchOption.AllDirectories))
+                foreach (var item in Directory.GetFiles(json, "*.json", SearchOption.AllDirectories))
                 {
                     var tjd = JsonConvert.DeserializeObject<ReadingContainer>(File.ReadAllText(item))!;
-
                     readings.AddRange(tjd.points);
                 }
 
-                jd = new()
-                {
-                    points = readings.ToArray()
-                };
+                jd = new() { points = readings.ToArray() };
             }
             else jd = JsonConvert.DeserializeObject<ReadingContainer>(File.ReadAllText(json))!;
+
+            DateTime[] timestamps = jd.points.Select(p => DateTime.Parse(p.date)).ToArray();
 
             List<float[]> GivenFormattedData = new();
             List<float[]> PredictedFormattedData = new();
 
-            var hourskip = 0;
-            var skipmedian = 0;
-            var hoursreached = 0;
-
-            var pasthour = 0;
-
-            // build given data + calculate readings per hour median
-
-            foreach (var item in jd.points)
+            for (int i = 0; i < jd.points.Length; i++)
             {
-                var hour = DateTime.Parse(item.date).Hour;
+                var item = jd.points[i];
+                var targetTime = timestamps[i].AddHours(hourspredict);
 
-                if (hour != pasthour)
+                int bestJ = -1;
+                double bestDiff = double.MaxValue;
+
+                for (int j = i + 1; j < jd.points.Length; j++)
                 {
-                    skipmedian += hourskip;
-                    hourskip = 0;
-                    hoursreached++;
+                    double diff = Math.Abs((timestamps[j] - targetTime).TotalMinutes);
 
-                    pasthour = hour;
+                    if (diff < bestDiff)
+                    {
+                        bestDiff = diff;
+                        bestJ = j;
+                    }
+
+                    if (timestamps[j] > targetTime && diff > bestDiff) break;
                 }
-                else hourskip++;
+
+                if (bestJ == -1 || bestDiff > 30) continue;
+
+                var target = jd.points[bestJ];
+                var hour = timestamps[i].Hour;
 
                 GivenFormattedData.Add([
                     item.temp,
@@ -70,31 +72,12 @@ namespace Predictor
                 ]);
 
                 PredictedFormattedData.Add([
-                    item.temp,
-                    item.humidity,
-                    item.pressure,
-                    item.rain > 0 ? 1 : 0,
+                    target.temp,
+                    target.humidity,
+                    target.pressure,
+                    target.rain > 0 ? 1 : 0,
                 ]);
             }
-
-            skipmedian /= hoursreached;
-
-            // Rotate predicted data by hourspredict hours
-
-            LinkedList<float[]> shuffler = new(PredictedFormattedData);
-
-            for (int i = 0; i < skipmedian * hourspredict; i++)
-            {
-                // Source - https://stackoverflow.com/a/9948241
-                // Posted by Jon Skeet, modified by community. See post 'Timeline' for change history
-                // Retrieved 2026-03-25, License - CC BY-SA 4.0
-
-                var first = shuffler.First;
-                shuffler.RemoveFirst();
-                shuffler.AddLast(first!);
-            }
-
-            PredictedFormattedData = shuffler.ToList();
 
             var (inMean, inStd) = ListHelpers.ComputeNorm(GivenFormattedData);
             var (outMean, outStd) = ListHelpers.ComputeNorm(PredictedFormattedData);
@@ -107,15 +90,17 @@ namespace Predictor
                 for (int c = 0; c < 4; c++)
                     PredictedFormattedData[r][c] = (PredictedFormattedData[r][c] - outMean[c]) / outStd[c];
 
-            File.WriteAllText("data_normals.json",
-                JsonConvert.SerializeObject(new NormalizedJson() {
-                    inMean = inMean, inStd = inStd,
-                    outMean = outMean, outStd = outStd,
-                }));
+            File.WriteAllText("data_normals.json", JsonConvert.SerializeObject(new NormalizedJson()
+            {
+                inMean = inMean,
+                inStd = inStd,
+                outMean = outMean,
+                outStd = outStd,
+            }));
 
             return (
-                tensor(ListHelpers.ToArray(GivenFormattedData)).reshape(GivenFormattedData.Count,9),
-                tensor(ListHelpers.ToArray(PredictedFormattedData)).reshape(GivenFormattedData.Count,4));
+                tensor(ListHelpers.ToArray(GivenFormattedData)).reshape(GivenFormattedData.Count, 9),
+                tensor(ListHelpers.ToArray(PredictedFormattedData)).reshape(GivenFormattedData.Count, 4));
         }
 
         public WeatherReading[] points { get; set; } = [];
